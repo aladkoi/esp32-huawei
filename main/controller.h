@@ -40,6 +40,8 @@ typedef struct {
     int break_level;           // Уровень тормоза (1 - не нажат, 0 - нажат)
     int change_event;             // событие для мобильного приложения
     int volt_add_speed;
+    uint32_t pulse_count;
+    //int64_t last_pulse_time;
 } ControllerState_t;
 
 // Глобальные переменные

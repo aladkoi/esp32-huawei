@@ -29,11 +29,12 @@ ControllerState_t state = {
     .addspeed = false,
     .break_level = 1,
     .change_event=0,
-    .volt_add_speed=0
+    .volt_add_speed=0,
+    .pulse_count = 0
 };
 
 //volatile float level_crouise[6] = {0, 21.4, 33.2, 46.0, 58.4, 95.0};
-volatile int rpm_crouise[6] = {112, 140, 160, 180, 192, 200};
+volatile int rpm_crouise[6] = {132, 160, 192, 220, 240,255};
 const int len_crouise = 5; // Размер массива круиза минус 1
 
 

@@ -5,7 +5,7 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_log.h"
-#include "driver/uart.h"
+//#include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
 #include <math.h>
@@ -20,6 +20,7 @@
 //#include "led_break.h"
 #include "ble_spp.c"
 #include "driver/dac_oneshot.h"
+#include "esp_timer.h"  // Для работы с таймером
 //#include "esp_vfs_dev.h"
 #include "controller.h"
 #define TAG "BUTTON"
@@ -37,7 +38,11 @@
 #define BLUE_LED_PIN GPIO_NUM_2
 #define POWER_PIN 4
 #define BREAK_PIN 21 // Вход стоп-сигнала
-//#define SPEED_PIN 19 /// датчик скорости
+#define SPEED_PIN 19 /// датчик скорости
+#define TIMEOUT_MS 4000  // 4 секунды в миллисекундах
+//static int64_t last_pulse_time = 0;  // Время последнего импульса (в микросекундах)
+
+
 #define PIN 14 /// включение преобразоватля
 
  
@@ -49,8 +54,10 @@
 // #define UART_PORT UART_NUM_0   
 dac_oneshot_handle_t dac_handle;
 
+
 // Очередь UART
 //static QueueHandle_t uart_queue;
+esp_timer_handle_t pulse_timer;
 
 
 
@@ -65,6 +72,61 @@ static const char *button_event_names[] = {
     [BUTTON_LONG_PRESS_HOLD] = "BUTTON_LONG_PRESS_HOLD",
     [BUTTON_LONG_PRESS_UP] = "BUTTON_LONG_PRESS_UP",
 };
+
+
+void pulse_timer_cb(void *arg) {
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+        // Здесь происходит обработка импульсов за текущую секунду
+        //printf("Импульсы за последнюю секунду: %lu\n", state.pulse_count);
+
+        // Обнуляем счётчик, чтобы начать подсчёт снова
+        state.pulse_count = 0;
+
+        xSemaphoreGive(state_mutex);
+    }
+}
+
+static void button_press_cb(void *arg, void *usr_data) {
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+        state.pulse_count++;  // Увеличиваем счётчик
+        //printf("Кнопка нажата, счётчик увеличен: %lu\n", state.pulse_count);
+        xSemaphoreGive(state_mutex);
+    }
+}
+
+
+// Инициализация таймера
+void init_pulse_timer() {
+    esp_timer_handle_t pulse_timer;
+    const esp_timer_create_args_t timer_args = {
+        .callback = &pulse_timer_cb,
+        .name = "pulse_timer"
+    };
+    esp_timer_create(&timer_args, &pulse_timer);
+    esp_timer_start_periodic(pulse_timer, 1000000); // Таймер вызывается каждую секунду
+}
+
+void init_speed(void){
+
+    button_config_t btn_cfg = {
+        .long_press_time = 100,
+        .short_press_time = 1,
+    };
+    button_gpio_config_t gpio_cfg = {
+        .gpio_num = SPEED_PIN,
+        .active_level = BUTTON_ACTIVE_LEVEL,
+    };
+    button_handle_t btn;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &gpio_cfg, &btn);
+    assert(ret == ESP_OK);
+    ret |= iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_press_cb, NULL);
+
+    if (ret != ESP_OK) {
+        printf("Ошибка добавления обработчика: %s\n", esp_err_to_name(ret));
+        return;
+    } 
+
+}
 
 
 
@@ -116,7 +178,8 @@ static const char *button_event_names[] = {
 
 
 
-// Обработчики событий кнопок
+
+// Обработчики событий кнопок стоп
 static void button_event_break(void *arg, void *data) {
     printf("button_event_break\n");
     if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
@@ -132,6 +195,9 @@ static void button_event_break(void *arg, void *data) {
         stop_Speed(true);
         setCurrentLevel();
         state.change_event=20;
+
+        
+
         xSemaphoreGive(state_mutex);
     }
 }
@@ -139,9 +205,11 @@ static void button_event_break(void *arg, void *data) {
 static void button_event_break_long(void *arg, void *data) { /// сработал долгий тормоз
     printf("button_event_break_long\n");
     if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+        if (state.pulse_count==0){   /// если вел стоял
         state.break_long = true;
         state.addspeed = false;
         state.current_amper = 3; // Сбрасываем в исходное состояние
+        }
         xSemaphoreGive(state_mutex);
     }
     printf("button_event_break_long_end--------\n");
@@ -151,6 +219,11 @@ static void button_event_break_end(void *arg, void *data) {
     printf("button_event_break_end\n");
     if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
         gpio_set_level(BLUE_LED_PIN, 0);
+
+
+            // Остановка задачи подсчёта
+
+
         if (!state.break_long) { /// не было длинного стоп
             printf("state.break_volt_bl=%d",state.break_volt_bl);            
             state.volt_bl = state.break_volt_bl;
@@ -288,9 +361,6 @@ static void init_button(void) {
 }
 
 
-
-
-
 static void loop_controller(void* parameter) {
     printf("Start loop_controller\n");
     int my_voltbl = 0;
@@ -409,5 +479,7 @@ void app_main(void) {
 
     // Установка высокого уровня (1) на GPIO14
     ESP_ERROR_CHECK(gpio_set_level(PIN, 1));
-
+    init_speed();
+    init_pulse_timer();
+ 
 }
