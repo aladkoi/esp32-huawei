@@ -73,58 +73,22 @@ static const char *button_event_names[] = {
     [BUTTON_LONG_PRESS_UP] = "BUTTON_LONG_PRESS_UP",
 };
 
-
-void pulse_timer_cb(void *arg) {
-    if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-        // Здесь происходит обработка импульсов за текущую секунду
-        //printf("Импульсы за последнюю секунду: %lu\n", state.pulse_count);
-
-        // Обнуляем счётчик, чтобы начать подсчёт снова
-        state.pulse_count = 0;
-
-        xSemaphoreGive(state_mutex);
-    }
-}
-
-static void button_press_cb(void *arg, void *usr_data) {
-    if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-        state.pulse_count++;  // Увеличиваем счётчик
-        //printf("Кнопка нажата, счётчик увеличен: %lu\n", state.pulse_count);
-        xSemaphoreGive(state_mutex);
-    }
-}
-
-
-// Инициализация таймера
-void init_pulse_timer() {
-    esp_timer_handle_t pulse_timer;
-    const esp_timer_create_args_t timer_args = {
-        .callback = &pulse_timer_cb,
-        .name = "pulse_timer"
-    };
-    esp_timer_create(&timer_args, &pulse_timer);
-    esp_timer_start_periodic(pulse_timer, 1000000); // Таймер вызывается каждую секунду
+void IRAM_ATTR gpio_isr_handler(void* arg) {
+    state.pulse_count++;
 }
 
 void init_speed(void){
-
-    button_config_t btn_cfg = {
-        .long_press_time = 100,
-        .short_press_time = 1,
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_POSEDGE,  // Прерывание на фронте сигнала
+        .pin_bit_mask = (1ULL << SPEED_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE
     };
-    button_gpio_config_t gpio_cfg = {
-        .gpio_num = SPEED_PIN,
-        .active_level = BUTTON_ACTIVE_LEVEL,
-    };
-    button_handle_t btn;
-    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &gpio_cfg, &btn);
-    assert(ret == ESP_OK);
-    ret |= iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_press_cb, NULL);
+    gpio_config(&io_conf);
 
-    if (ret != ESP_OK) {
-        printf("Ошибка добавления обработчика: %s\n", esp_err_to_name(ret));
-        return;
-    } 
+    // Установка обработчика прерываний
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(SPEED_PIN, gpio_isr_handler, NULL);
 
 }
 
@@ -190,6 +154,7 @@ static void button_event_break(void *arg, void *data) {
         DoLight(128);
         state.controllerBrake = false;
         state.break_volt_bl = state.volt_bl;
+        printf("state.break_volt_bl1=%d\n",state.break_volt_bl);       
         state.break_croiuse_level = state.croiuse_level;
         state.addspeed = false;
         stop_Speed(true);
@@ -225,7 +190,7 @@ static void button_event_break_end(void *arg, void *data) {
 
 
         if (!state.break_long) { /// не было длинного стоп
-            printf("state.break_volt_bl=%d",state.break_volt_bl);            
+            printf("state.break_volt_bl2=%d\n",state.break_volt_bl);            
             state.volt_bl = state.break_volt_bl;
             if (state.volt_bl > 0) {
                 state.croiuse_level = get_level(true) - 1;
@@ -434,11 +399,11 @@ static int null_output(struct _reent *r, void *fd, const char *ptr, int len) {
     return len; // Возвращаем длину, как будто вывод успешен
 }
 void app_main(void) {
+    uint64_t start_time;
     esp_log_set_vprintf(log_dummy); // Устанавливаем заглушку на логи esp
 
     setvbuf(stdout, NULL, _IONBF, 0); // Отключаем буферизацию  
     stdout->_write = null_output;     // отключает вывод логов по printf
-
 
     controller_init();
     init_button();
@@ -480,6 +445,16 @@ void app_main(void) {
     // Установка высокого уровня (1) на GPIO14
     ESP_ERROR_CHECK(gpio_set_level(PIN, 1));
     init_speed();
-    init_pulse_timer();
+
+    while (1) {
+        state.pulse_count = 0; // Сброс счетчика импульсов
+        // Засечь время: 1 секунда
+        start_time = esp_timer_get_time();
+        while ((esp_timer_get_time() - start_time) < 1000000) {
+            // Ждем 1 секунду
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
+        printf("Импульсы за последнюю секунду: %lu\n", state.pulse_count);
+    }
  
 }

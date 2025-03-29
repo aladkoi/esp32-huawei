@@ -1,4 +1,4 @@
-///это реле включения 
+///это реле включения звонка
 #ifndef RELAY_PULSE_H
 #define RELAY_PULSE_H
 
